@@ -10,7 +10,8 @@ import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.optim as optim
 import yaml
-from albumentations.augmentations import transforms
+import albumentations as A
+
 from albumentations.core.composition import Compose
 from sklearn.model_selection import train_test_split
 from torch.optim import lr_scheduler
@@ -51,7 +52,10 @@ def parse_args():
                         help='loss: ' + ' | '.join(LOSS_NAMES) + ' (default: BCEDiceLoss)')
 
     # data
+    
     parser.add_argument('--dataset', default='isic', help='dataset name')  ### isic, busi, chasedb1, glas
+    parser.add_argument('--data_root', default='/data/phucnd/Bubble_Glare_Baseline/Rolling-Unet/inputs/glare/Lung_cancer_lesions_unclean_glare', type=str,
+                    help='path to dataset root that contains train/val/test')
     parser.add_argument('--img_ext', default='.png', help='image file extension')
     parser.add_argument('--mask_ext', default='.png', help='masks file extension')
 
@@ -242,35 +246,59 @@ def main():
         raise NotImplementedError
 
     # Data loading code
-    img_ids = glob(os.path.join('inputs', config['dataset'], 'images', '*' + config['img_ext']))
-    img_ids = [os.path.splitext(os.path.basename(p))[0] for p in img_ids]
+    def list_ids(img_dir, img_ext):
+        paths = glob(os.path.join(img_dir, '*' + img_ext))
+        return [os.path.splitext(os.path.basename(p))[0] for p in paths]
 
-    train_img_ids, val_img_ids = train_test_split(img_ids, test_size=0.2, random_state=41)
+    train_img_dir = os.path.join(config['data_root'], 'train', 'imgs')
+    val_img_dir   = os.path.join(config['data_root'], 'val', 'imgs')
+    test_img_dir  = os.path.join(config['data_root'], 'test', 'imgs')
 
-    train_transform = Compose([
-        RandomRotate90(),
-        transforms.Flip(),
-        Resize(config['input_h'], config['input_w']),
-        transforms.Normalize(),
+    train_mask_dir = os.path.join(config['data_root'], 'train', 'masks')  # bên trong có folder "0"
+    val_mask_dir   = os.path.join(config['data_root'], 'val', 'masks')
+    test_mask_dir  = os.path.join(config['data_root'], 'test', 'masks')
+
+    train_img_ids = list_ids(train_img_dir, config['img_ext'])
+    val_img_ids   = list_ids(val_img_dir, config['img_ext'])
+    test_img_ids  = list_ids(test_img_dir, config['img_ext'])
+
+
+    train_transform = A.Compose([
+        A.RandomRotate90(),
+        A.HorizontalFlip(p=0.5),   # hoặc VerticalFlip(p=0.5)
+        A.Resize(config['input_h'], config['input_w']),
+        A.Normalize(),
     ])
 
-    val_transform = Compose([
-        Resize(config['input_h'], config['input_w']),
-        transforms.Normalize(),
+
+    val_transform = A.Compose([
+        A.Resize(config['input_h'], config['input_w']),
+        A.Normalize(),
     ])
+
 
     train_dataset = Dataset(
         img_ids=train_img_ids,
-        img_dir=os.path.join('inputs', config['dataset'], 'images'),
-        mask_dir=os.path.join('inputs', config['dataset'], 'masks'),
+        img_dir=train_img_dir,
+        mask_dir=train_mask_dir,
         img_ext=config['img_ext'],
         mask_ext=config['mask_ext'],
         num_classes=config['num_classes'],
         transform=train_transform)
+
     val_dataset = Dataset(
         img_ids=val_img_ids,
-        img_dir=os.path.join('inputs', config['dataset'], 'images'),
-        mask_dir=os.path.join('inputs', config['dataset'], 'masks'),
+        img_dir=val_img_dir,
+        mask_dir=val_mask_dir,
+        img_ext=config['img_ext'],
+        mask_ext=config['mask_ext'],
+        num_classes=config['num_classes'],
+        transform=val_transform)
+
+    test_dataset = Dataset(
+        img_ids=test_img_ids,
+        img_dir=test_img_dir,
+        mask_dir=test_mask_dir,
         img_ext=config['img_ext'],
         mask_ext=config['mask_ext'],
         num_classes=config['num_classes'],
@@ -285,6 +313,13 @@ def main():
         pin_memory=False)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
+        batch_size=config['batch_size'],
+        shuffle=False,
+        num_workers=config['num_workers'],
+        drop_last=False,
+        pin_memory=False)
+    test_loader = torch.utils.data.DataLoader(
+        test_dataset,
         batch_size=config['batch_size'],
         shuffle=False,
         num_workers=config['num_workers'],
@@ -351,6 +386,19 @@ def main():
             break
 
         torch.cuda.empty_cache()
+    
+    print("Loading best model for final test evaluation...")
+    best_path = 'models/%s/model.pth' % config['name']
+    model.load_state_dict(torch.load(best_path, map_location='cuda'))
+    test_log = validate(config, test_loader, model, criterion)
+
+    print('TEST  loss %.4f - iou %.4f - dice %.4f'
+        % (test_log['loss'], test_log['iou'], test_log['dice']))
+
+    # lưu thêm kết quả test vào file (tuỳ chọn)
+    with open('models/%s/test_result.txt' % config['name'], 'w') as f:
+        f.write('TEST loss %.6f iou %.6f dice %.6f\n' %
+                (test_log['loss'], test_log['iou'], test_log['dice']))
 
 
 if __name__ == '__main__':
