@@ -54,7 +54,7 @@ def parse_args():
     # data
     
     parser.add_argument('--dataset', default='isic', help='dataset name')  ### isic, busi, chasedb1, glas
-    parser.add_argument('--data_root', default='/data/phucnd/Bubble_Glare_Baseline/Rolling-Unet/inputs/glare/Lung_cancer_lesions_unclean_glare', type=str,
+    parser.add_argument('--data_root', default='None', type=str,
                     help='path to dataset root that contains train/val/test')
     parser.add_argument('--img_ext', default='.png', help='image file extension')
     parser.add_argument('--mask_ext', default='.png', help='masks file extension')
